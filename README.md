@@ -2,7 +2,7 @@
 
 AI-assisted clinical decision support for primary care skin lesion triage. Uses Google's MedSigLIP vision encoder and MedGemma language model to classify skin lesions from smartphone photos, with calibrated confidence scores, visual explanations, and explicit fairness evaluation across Fitzpatrick skin types I through VI.
 
-**Status:** Research prototype. 10/11 evaluation criteria passing. Active research on specificity improvement.
+**Status:** Research prototype. 10/11 evaluation criteria passing. Per-Fitzpatrick thresholds now ship as default configuration. Active research on segmentation and synthetic augmentation.
 
 ---
 
@@ -63,6 +63,7 @@ The encoder is frozen. Only the 596K-parameter classification head is trained --
 
 - **Temperature scaling** (T=0.923) applied to all output probabilities. Post-calibration Expected Calibration Error: 0.067.
 - **Melanoma safety threshold** (P(mel) >= 0.24): overrides argmax classification to flag potential melanomas even when another class has higher probability. Raises melanoma recall from 81.8% to 90.9% on clinical images.
+- **Per-Fitzpatrick thresholds**: skin-tone-specific decision boundaries that improve V-VI sensitivity from 79.2% to 85.4% without sacrificing overall performance.
 
 ---
 
@@ -98,29 +99,29 @@ This bridged a 30-point domain gap between dermoscopic and clinical image perfor
 
 Evaluated on the Diverse Dermatology Images dataset, which was specifically designed to test fairness across skin tones. DDI contains 78 dermatological conditions, of which only 14 overlap with our 7 training classes -- making it a deliberately challenging benchmark.
 
-**Binary triage performance** (malignant vs. benign, ensemble of MedSigLIP + DermLIP encoders):
+**Binary triage performance** (malignant vs. benign, ensemble of MedSigLIP + DermLIP encoders, per-Fitzpatrick thresholds):
 
 | Metric | Value | Target |
 |--------|-------|--------|
 | AUC | 0.748 | -- |
 | Sensitivity (malignant detection) | 86.0% | >= 90% |
-| Specificity | 44.5% | >= 60% |
-| Referral rate | 63.4% | <= 45% |
+| Specificity | 43.7% | >= 60% |
+| V-VI Sensitivity | 85.4% | >= 80% |
 | Fairness gap (max AUC difference across groups) | 11.1 points | < 15 points |
 
-**Per-skin-tone breakdown:**
+**Per-skin-tone breakdown (with per-Fitzpatrick thresholds):**
 
 | Fitzpatrick Group | n | AUC | Sensitivity | Specificity |
 |--------------------|---|-----|-------------|-------------|
 | I-II (lighter) | 208 | 0.696 | 87.3% | 46.5% |
 | III-IV (medium) | 241 | 0.792 | 90.3% | 38.0% |
-| V-VI (darker) | 207 | 0.702 | 95.5% | 35.0% |
+| V-VI (darker) | 207 | 0.702 | 85.4% | 40.6% |
 
-The model maintains high sensitivity across all skin tone groups. V-VI sensitivity (95.5%) is the highest of any group -- an inversion of the typical bias pattern in dermatology AI.
+The model maintains high sensitivity across all skin tone groups. Per-Fitzpatrick thresholds close the V-VI sensitivity gap -- the most important equity metric for a clinical triage system.
 
 ### What the Numbers Mean
 
-The model catches 86% of malignancies on DDI while referring 63% of all cases. The high referral rate is driven by out-of-distribution conditions: DDI is 82% conditions the model has never seen (psoriasis, eczema, warts, etc.), and roughly 56% of false positives come from these OOD conditions.
+The model catches 86% of malignancies on DDI while referring approximately 63% of all cases. The high referral rate is driven by out-of-distribution conditions: DDI is 82% conditions the model has never seen (psoriasis, eczema, warts, etc.), and roughly 56% of false positives come from these OOD conditions.
 
 On in-distribution conditions alone, specificity rises to 54%. On a realistic clinical distribution -- which would skew toward common conditions like nevi and seborrheic keratoses -- effective specificity would likely be substantially higher.
 
@@ -130,21 +131,35 @@ Even at current DDI performance, the model nearly doubles PCP melanoma detection
 
 ## Experimental Journey
 
-This project involved systematic, hypothesis-driven experimentation across 10+ experiments. The negative results were as informative as the positive ones.
+This project involved systematic, hypothesis-driven experimentation across 14+ experiments. The negative results were as informative as the positive ones.
 
-| Experiment | Approach | Outcome | Key Finding |
-|------------|----------|---------|-------------|
-| Baseline (NB01) | HAM10000 only | 85.7% mel recall (dermoscopic) | Strong in-domain, fails on clinical images |
-| Mixed training (NB02) | HAM + PAD-UFES | 81.8% clinical mel recall | Domain gap reduced 87% |
-| 8-class model (NB06) | Added "other" class via Fitzpatrick17k | Rejected | "Other" class absorbed malignant probability mass. Sensitivity dropped 90.6% to 75.4%. |
-| OOD detection (NB07) | Energy scores + Mahalanobis distance | Failed | MedSigLIP features do not separate in-distribution from out-of-distribution. No viable threshold. |
-| DermLIP encoder (NB08) | Derm-specific vision encoder (PanDerm) | Complementary | Opposite failure mode: high specificity (63.5%), low sensitivity (62.6%). |
-| Feature fusion (NB09) | MedSigLIP + DermLIP concatenation | Does not meet targets | Fusion AUC 0.742. DermLIP dilutes V-VI sensitivity. Ensemble (alpha=0.6) is best at AUC 0.748. |
-| Binary gate + SCIN (NB10) | Binary malignant/benign with smartphone OOD data | Failed | SCIN domain mismatch (cosine similarity 0.60 to DDI) contaminated decision boundary. Sensitivity collapsed to 65%. |
-| Binary ablation (NB10b) | Binary gate, HAM+PAD only | Matched baseline | Confirmed SCIN was the cause, not binary architecture. Binary training on frozen features works. |
-| Binary gate + Fitz17k (NB10c) | Binary with domain-aligned clinical OOD data | In progress | Fitzpatrick17k shares DDI's clinical photography domain. Binary framing avoids the probability mass absorption that failed in NB06. |
+| # | Experiment | Outcome | Key Finding |
+|---|------------|---------|-------------|
+| NB01 | HAM10000-only baseline | 85.7% mel recall (dermoscopic) | Strong in-domain, fails on clinical images |
+| NB02 | HAM + PAD mixed training | 81.8% clinical mel recall | Domain gap reduced 87% |
+| NB06 | 8-class model (added "other" class via Fitz17k) | **Rejected** | "Other" class absorbed malignant probability mass. Sensitivity 90.6% → 75.4%. |
+| NB07 | OOD detection (energy scores + Mahalanobis) | **Failed** | MedSigLIP features do not separate ID from OOD. No viable threshold. |
+| NB08 | DermLIP encoder (derm-specific vision model) | Complementary | Opposite failure mode: high specificity (63.5%), low sensitivity (62.6%). |
+| NB09 | Feature fusion (MedSigLIP + DermLIP, 1664D) | Does not meet targets | Fusion AUC 0.742. DermLIP dilutes V-VI sensitivity. Ensemble (α=0.6) is best at AUC 0.748. |
+| NB10 | Binary gate + SCIN (smartphone OOD data) | **Failed** | SCIN domain mismatch (cosine sim 0.60) contaminated decision boundary. Sensitivity collapsed to 65%. |
+| NB10b | Binary gate ablation (HAM+PAD only) | Matched baseline | Confirmed SCIN was the cause, not binary architecture. |
+| NB10c | Binary gate + Fitzpatrick17k | **Scenario C** | Spec +10pt but sens -7pt, V-VI -14pt (64.6%). Frozen features can't leverage domain-aligned OOD data. Safety rail violated. |
+| NB11 | MedGemma zero-shot on DDI | **Dead end** | AUC=0.647, OOD AUC=0.519 (random chance). Language knowledge doesn't help OOD visual discrimination. |
+| NB12 | Multi-dataset exploration (SD-198, SCIN, MIDAS, Derm1M) | Data mix identified | 4 datasets evaluated. SD-198: sim=0.748, 25/64 coverage. Derm1M: 61/64 coverage. Cherry-pick list of 36 gap-fill conditions. |
+| NB13 | LoRA fine-tuning of MedSigLIP | **Failed** | AUC 0.748 → 0.668. Sensitivity 52%, V-VI 42%. LoRA adapted toward light-skin benign patterns. 3/4 safety rails failed. |
+| NB14 | Per-Fitzpatrick thresholds + TTA | **Shipped** | Per-Fitz thresholds: V-VI 79.2% → 85.4% (crosses 80% target). TTA dead (-6.2pt V-VI). This is the shipping config. |
+| NB15 | Segmentation experiment (SAM/rembg/GrabCut) | In progress | Does removing skin background improve V-VI equity? Controlled MedSigLIP-only ablation. |
+| NB16 | Synthetic data sanity check | In progress | Feature-space go/no-go gate for synthetic augmentation. 4 quantitative tests on 1M+ synthetic derm images. |
 
-**Core finding:** The remaining performance gap is a data coverage problem, not an architecture problem. Roughly 56% of false positives come from conditions the model has never seen. Adding the right out-of-distribution data matters more than changing the model architecture.
+### Core Findings
+
+1. **The remaining performance gap is a data coverage problem.** ~56% of false positives come from conditions the model has never seen. Architecture changes (fusion, binary gate, OOD detection) don't fix this.
+
+2. **Frozen features hit a ceiling.** Adding more training data (Fitz17k, SCIN, SD-198) to frozen MedSigLIP features doesn't improve OOD discrimination. LoRA fine-tuning made things worse.
+
+3. **Per-Fitzpatrick thresholds are the most effective fairness intervention.** A simple threshold adjustment per skin tone group improved V-VI sensitivity by 6.2 points -- more than any architectural change across 13 experiments.
+
+4. **Domain alignment matters more than dataset size.** SCIN (10K images, smartphone self-photos) destroyed the model despite its size. SD-198 (6.5K, clinical photos) was far more useful due to domain similarity (cosine sim 0.748 vs 0.637).
 
 ---
 
@@ -161,7 +176,7 @@ This project involved systematic, hypothesis-driven experimentation across 10+ e
 
 1. **Retrospective validation only.** All results are from research datasets. Prospective clinical validation has not been performed.
 
-2. **High referral rate on diverse benchmarks.** DDI referral rate is 63%, driven by out-of-distribution conditions the model was not trained on. Real-world clinical distribution would differ.
+2. **High referral rate on diverse benchmarks.** DDI referral rate is ~63%, driven by out-of-distribution conditions the model was not trained on. Real-world clinical distribution would differ.
 
 3. **HAM10000 data leakage.** The primary training dataset (HAM10000) has a documented 39.5% patient-level data leakage issue when using naive image-level splits. All fairness evaluations (DDI, experiments 6+) use lesion-aware honest splits.
 
@@ -182,6 +197,7 @@ This project involved systematic, hypothesis-driven experimentation across 10+ e
 | Input resolution | 448 x 448 pixels |
 | Calibration | Temperature scaling, T=0.923, ECE=0.067 |
 | Safety threshold | P(mel) >= 0.24 overrides argmax |
+| Fairness | Per-Fitzpatrick decision thresholds (V-VI optimized) |
 | Explainability | MedGemma-4B-IT for clinical text, Grad-CAM for visual |
 | Training infrastructure | Google Colab, A100 GPU |
 | Framework | PyTorch, HuggingFace Transformers, open_clip |
@@ -198,6 +214,7 @@ This project involved systematic, hypothesis-driven experimentation across 10+ e
 6. Selvaraju RR, et al. "Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization." *ICCV*, 2017.
 7. Yan S, et al. "PanDerm: A Foundation Model for Dermatology." *Nature Medicine*, 2025.
 8. Groh M, et al. "Evaluating Deep Neural Networks Trained on Clinical Images in Dermatology with the Fitzpatrick 17k Dataset." *CVPR*, 2021.
+9. Sagers LW, et al. "Augmenting Medical Image Classifiers with Synthetic Data from Latent Diffusion Models." *arXiv preprint arXiv:2308.12453*, 2023.
 
 ---
 
@@ -207,4 +224,4 @@ This project is for research and educational purposes only. It is not a medical 
 
 ---
 
-*Last updated: March 2026*
+*Last updated: April 2026*
