@@ -2,7 +2,7 @@
 
 AI-assisted clinical decision support for primary care skin lesion triage. Uses Google's MedSigLIP vision encoder and MedGemma language model to classify skin lesions from smartphone photos, with calibrated confidence scores, visual explanations, and explicit fairness evaluation across Fitzpatrick skin types I through VI.
 
-**Status:** Research prototype. 10/11 evaluation criteria passing. Per-Fitzpatrick thresholds now ship as default configuration. Active research on segmentation and synthetic augmentation.
+**Status:** Research prototype — 17 experiments across 17 notebooks. Per-Fitzpatrick thresholds ship as default configuration. Synthetic augmentation path eliminated (shortcut learning). Model frozen for informal clinical pilot study. Active research on segmentation and prevalence-based reframing.
 
 ---
 
@@ -139,11 +139,21 @@ On in-distribution conditions alone, specificity rises to 54%. On a realistic cl
 
 Even at current DDI performance, the model nearly doubles PCP melanoma detection accuracy (86% vs. ~45% baseline).
 
+### Prevalence Context
+
+DDI's metrics are evaluated at 26.1% malignancy prevalence and 82% OOD conditions -- neither resembles a PCP waiting room. At realistic PCP prevalence (~2-3% malignant):
+
+- **NPV ~99.6%** -- when the model says "low risk," it's right >99% of the time
+- **PPV drops to ~4%** -- most referrals are false positives, but this is comparable to human PCP practice (published NNB for melanoma = 22.6, per Petty et al., JAAD 2020)
+- **Weighted specificity approaches 50%** at realistic OOD proportions (15-25%)
+
+This reframing (Rikhye et al., eBioMedicine 2025; Godau et al., MedIA 2025) shows the model's clinical utility is substantially better than DDI raw metrics suggest.
+
 ---
 
 ## Experimental Journey
 
-This project involved systematic, hypothesis-driven experimentation across 14+ experiments. The negative results were as informative as the positive ones.
+This project involved systematic, hypothesis-driven experimentation across 17 notebooks. The negative results were as informative as the positive ones.
 
 | # | Experiment | Outcome | Key Finding |
 |---|------------|---------|-------------|
@@ -161,7 +171,22 @@ This project involved systematic, hypothesis-driven experimentation across 14+ e
 | NB13 | LoRA fine-tuning of MedSigLIP | **Failed** | AUC 0.748 → 0.668. Sensitivity 52%, V-VI 42%. LoRA adapted toward light-skin benign patterns. 3/4 safety rails failed. |
 | NB14 | Per-Fitzpatrick thresholds + TTA | **Shipped** | Per-Fitz thresholds: V-VI 79.2% → 85.4% (crosses 80% target). TTA dead (-6.2pt V-VI). This is the shipping config. |
 | NB15 | Segmentation experiment (SAM/rembg/GrabCut) | In progress | Does removing skin background improve V-VI equity? Controlled MedSigLIP-only ablation. |
-| NB16 | Synthetic data sanity check | In progress | Feature-space go/no-go gate for synthetic augmentation. 4 quantitative tests on 1M+ synthetic derm images. |
+| NB16 | Synthetic data sanity check | **KILL** | Shortcut classifier 95.7% — CLIP-family encoders trivially separate real from synthetic. Domain sim 0.728 (PASS), coverage 45% (CAUTION), V-VI proximity 0.732 (PASS). Synthetic augmentation dead. |
+| NB17 | Prevalence re-weighting analysis | **Reframe** | Bayesian PPV/NPV at PCP prevalence: NPV ~99.6%. NNB comparison vs PCP benchmark (22.6). Per-condition FP ranking for future work. |
+
+### Dead Paths
+
+| Path | Experiment | Why It Failed |
+|------|-----------|---------------|
+| 8-class "other" model | NB06 | "Other" class absorbed malignant probability mass |
+| Energy/Mahalanobis OOD | NB07 | MedSigLIP features don't separate ID from OOD |
+| SCIN training data | NB10 | Domain mismatch (cosine sim 0.60) contaminated decision boundary |
+| Frozen features + new data | NB10c | Frozen MedSigLIP features hit ceiling regardless of data quality |
+| MedGemma zero-shot | NB11 | Language knowledge doesn't help OOD visual discrimination |
+| LoRA fine-tuning | NB13 | Adapted toward light-skin benign patterns from Fitz I-III skewed data |
+| Test-time augmentation | NB14 | MedSigLIP already spatially invariant; V-VI cratered -6.2pt |
+| Synthetic augmentation | NB16 | CLIP shortcut learning: 95.7% real/synthetic separability |
+| MIDAS dataset | Research | Only mainstream derm-onc conditions; zero coverage of 64 DDI OOD conditions |
 
 ### Core Findings
 
@@ -169,9 +194,13 @@ This project involved systematic, hypothesis-driven experimentation across 14+ e
 
 2. **Frozen features hit a ceiling.** Adding more training data (Fitz17k, SCIN, SD-198) to frozen MedSigLIP features doesn't improve OOD discrimination. LoRA fine-tuning made things worse.
 
-3. **Per-Fitzpatrick thresholds are the most effective fairness intervention.** A simple threshold adjustment per skin tone group improved V-VI sensitivity by 6.2 points -- more than any architectural change across 13 experiments.
+3. **Per-Fitzpatrick thresholds are the most effective fairness intervention.** A simple threshold adjustment per skin tone group improved V-VI sensitivity by 6.2 points -- more than any architectural change across 16 experiments.
 
 4. **Domain alignment matters more than dataset size.** SCIN (10K images, smartphone self-photos) destroyed the model despite its size. SD-198 (6.5K, clinical photos) was far more useful due to domain similarity (cosine sim 0.748 vs 0.637).
+
+5. **Synthetic data is blocked by CLIP shortcut learning.** MedSigLIP features encode "real vs generated" as a dominant signal (95.7% LogReg accuracy). This applies to all CLIP-family encoders, not just this specific synthetic dataset.
+
+6. **DDI metrics overstate the clinical problem.** At realistic PCP prevalence (~2-3% malignant), NPV reaches ~99.6%. The model's "low risk" call is extremely reliable in the target deployment setting.
 
 ---
 
@@ -227,6 +256,10 @@ This project involved systematic, hypothesis-driven experimentation across 14+ e
 7. Yan S, et al. "PanDerm: A Foundation Model for Dermatology." *Nature Medicine*, 2025.
 8. Groh M, et al. "Evaluating Deep Neural Networks Trained on Clinical Images in Dermatology with the Fitzpatrick 17k Dataset." *CVPR*, 2021.
 9. Sagers LW, et al. "Augmenting Medical Image Classifiers with Synthetic Data from Latent Diffusion Models." *arXiv preprint arXiv:2308.12453*, 2023.
+10. Borji A. "The Simplicity of Synthetic Data: CLIP-family Models Can Near-Perfectly Distinguish Real from Synthetic Images." *arXiv preprint arXiv:2407.21674*, 2024.
+11. Petty AJ, et al. "Number Needed to Biopsy to Find a Melanoma: A Systematic Review and Pooled Analysis." *JAAD*, 2020.
+12. Rikhye RV, et al. "Evaluating AI systems under real-world distribution shift in dermatology." *eBioMedicine*, 2025.
+13. Godau P, et al. "Deployment of AI for medical image classification: the impact of label shift." *Medical Image Analysis*, 2025.
 
 ---
 
