@@ -6,8 +6,6 @@ DermTriage helps primary care physicians decide whether a skin lesion needs derm
 
 **Currently running a small pilot study with clinicians. [Looking for more clinics to enroll.](#pilot-study)**
 
-> **Try it:** [Live demo on HuggingFace Spaces](https://huggingface.co/spaces/Kabirgrover/dermtriage)
-
 ---
 
 ## Why This Matters
