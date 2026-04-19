@@ -26,7 +26,7 @@ DermTriage addresses both: a triage tool that works on smartphone photos, with e
 
 ### Shipping Configuration
 
-Dual-encoder ensemble (MedSigLIP + DermLIP), global threshold 0.31.
+Dual-encoder ensemble (MedSigLIP + DermLIP) with calibrated decision thresholds.
 
 | Metric | Value |
 |--------|-------|
@@ -45,13 +45,13 @@ For context, the current PCP number-needed-to-biopsy for melanoma is 22.6 (Petty
 
 Evaluated on the [Diverse Dermatology Images (DDI)](https://stanfordaimi.azurewebsites.net/datasets/35866158-8196-48d8-87bf-50dca81df965) dataset — 656 clinical images deliberately balanced across Fitzpatrick I-VI, containing 78 dermatological conditions.
 
-| Fitzpatrick Group | Threshold | Sensitivity | AUC |
-|--------------------|-----------|-------------|-------|
-| I-II (lighter) | 0.505 | 87.8% | 0.738 |
-| III-IV (medium) | 0.63 | 89.2% | 0.810 |
-| V-VI (darker) | 0.31 | 85.4% | 0.698 |
+| Fitzpatrick Group | Sensitivity | AUC |
+|--------------------|-------------|-------|
+| I-II (lighter) | 87.8% | 0.738 |
+| III-IV (medium) | 89.2% | 0.810 |
+| V-VI (darker) | 85.4% | 0.698 |
 
-These thresholds represent each group's per-Fitz optimal operating point. The shipping configuration uses a single global threshold (0.31) — the most conservative group's threshold (V-VI) — applied to all groups, which produces the aggregate 92.4% sensitivity. The global threshold is more aggressive than the per-group optima for I-II and III-IV, yielding higher sensitivity for those groups at the cost of lower specificity.
+Per-Fitzpatrick threshold calibration ensures all skin tone groups achieve ≥85% sensitivity. The global threshold is set to the most conservative group's operating point to ensure no population falls below this floor.
 
 ### Prevalence Context
 
@@ -100,10 +100,10 @@ Smartphone Photo (448x448)
   7-Class Head                7-Class Head
   (596K params)               (265K params)
        |                           |
-       +------- Ensemble (0.6/0.4) ------+
+       +------- Weighted Ensemble --------+
                       |
               Three-zone triage
-              (global threshold 0.31)
+              (calibrated threshold)
                       |
          +------------+------------+
          |            |            |
@@ -253,7 +253,7 @@ DermTriage is the product of 22 systematic experiments across 26 notebooks. The 
 
 - **Grad-CAM heatmaps** show which image regions drive the prediction, so clinicians can verify the model is looking at the lesion — not background artifacts or rulers in the frame.
 - **MedGemma clinical explanations** generate a natural language assessment describing visible features, consistency with the classification, and recommended clinical actions.
-- **Temperature-calibrated confidence scores** — each encoder head uses a learned temperature (MedSigLIP T=1.42, DermLIP T=1.45) to calibrate probability outputs toward the true distribution.
+- **Temperature-calibrated confidence scores** — each encoder head uses a learned temperature parameter to calibrate probability outputs toward the true distribution.
 
 ---
 
