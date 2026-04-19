@@ -51,7 +51,7 @@ Evaluated on the [Diverse Dermatology Images (DDI)](https://stanfordaimi.azurewe
 | III-IV (medium) | 0.63 | 89.2% | 0.810 |
 | V-VI (darker) | 0.31 | 85.4% | 0.698 |
 
-All skin tone groups achieve ≥85% sensitivity. The global threshold (0.31) is set to the most conservative group (V-VI) to ensure no population falls below 85% sensitivity.
+These thresholds represent each group's per-Fitz optimal operating point. The shipping configuration uses a single global threshold (0.31) — the most conservative group's threshold (V-VI) — applied to all groups, which produces the aggregate 92.4% sensitivity. The global threshold is more aggressive than the per-group optima for I-II and III-IV, yielding higher sensitivity for those groups at the cost of lower specificity.
 
 ### Prevalence Context
 
@@ -103,7 +103,7 @@ Smartphone Photo (448x448)
        +------- Ensemble (0.6/0.4) ------+
                       |
               Three-zone triage
-              (per-Fitz thresholds)
+              (global threshold 0.31)
                       |
          +------------+------------+
          |            |            |
@@ -111,7 +111,7 @@ Smartphone Photo (448x448)
       heatmap    explanation   decision
 ```
 
-Both vision encoders are frozen — only the lightweight classification heads are trained (under 1M total parameters). MedSigLIP provides high sensitivity (catches melanoma). DermLIP provides complementary specificity (reduces false referrals). The ensemble balances both.
+Both vision encoders are frozen — only the lightweight classification heads are trained (~863K total parameters). MedSigLIP provides high sensitivity (catches melanoma). DermLIP provides complementary specificity (reduces false referrals). The ensemble balances both.
 
 MedGemma (Google's medical language model) generates natural language clinical explanations describing the visual features it observes, why the classification was made, and recommended next steps.
 
@@ -121,7 +121,7 @@ MedGemma (Google's medical language model) generates natural language clinical e
 |-------|-------------|------|
 | mel | Melanoma | Urgent referral |
 | bcc | Basal cell carcinoma | Referral |
-| akiec | Actinic keratosis / SCC | Referral |
+| akiec | Actinic keratosis / Bowen's disease | Referral |
 | bkl | Benign keratosis | Monitoring |
 | df | Dermatofibroma | Monitoring |
 | nv | Melanocytic nevus | Monitoring |
@@ -199,7 +199,7 @@ We are especially interested in:
 | Dataset | Type | Images | Population | Role |
 |---------|------|--------|------------|------|
 | HAM10000 | Dermoscopic | 10,015 | Fitzpatrick I-III | Primary training data |
-| PAD-UFES-20 | Smartphone clinical | ~2,100 | Fitzpatrick I-V (Brazil) | Domain adaptation |
+| PAD-UFES-20 | Smartphone clinical | ~2,300 | Fitzpatrick I-V (Brazil) | Domain adaptation |
 | DDI | Clinical photography | 656 | Fitzpatrick I-VI (balanced) | Fairness evaluation only |
 
 ### Strategy
@@ -210,14 +210,14 @@ Both classification heads are trained on HAM10000 + PAD-UFES-20 using mixed-doma
 
 ## Experimental Journey
 
-DermTriage is the product of 19 systematic experiments across 20 notebooks. The negative results were as informative as the positive ones.
+DermTriage is the product of 22 systematic experiments across 26 notebooks. The negative results were as informative as the positive ones.
 
 ### Key Experiments
 
 | Experiment | Result | What We Learned |
 |------------|--------|-----------------|
 | HAM10000-only baseline | 85.7% mel recall (dermoscopic) | Strong in-domain, but 54.5% on clinical photos — a coin flip |
-| Mixed training (HAM + PAD) | 90.9% mel recall (clinical) | Domain gap reduced 87%. The biggest win. |
+| Mixed training (HAM + PAD) | 81.8% mel recall (clinical) | Mel recall domain gap reduced 87%. The biggest win. |
 | DermLIP encoder swap | Complementary failure mode | Opposite to MedSigLIP: high specificity, low sensitivity. Led to ensemble. |
 | Feature fusion (1664D) | AUC 0.742, does not meet targets | Confirmed encoders are complementary but insufficient alone |
 | Binary gate + OOD data | Multiple failures | SCIN contaminated; Fitz17k helped specificity but crashed V-VI |
@@ -226,21 +226,25 @@ DermTriage is the product of 19 systematic experiments across 20 notebooks. The 
 | Prevalence re-weighting | **NPV = 99.3% at PCP prevalence** | DDI metrics dramatically overstate real-world false positive burden |
 | Segmentation (SAM) | Killed — AUC regressed | Removing skin background doesn't help; the problem is condition vocabulary |
 | Synthetic augmentation | Killed — 95.7% shortcut | CLIP-family encoders trivially separate real from synthetic images |
+| Derm1M rejection head | Killed — 99.5% shortcut | MedSigLIP trivially separates clinical vs dermoscopic domain |
+| PanDerm encoder swap | Killed — 99.2% shortcut | CLIP-distilled encoder inherits same domain shortcut |
+| DINOv3 encoder swap | Killed — 99.0% shortcut | Pure self-supervised (zero CLIP) — shortcut is fundamental to image statistics |
 
 ### Core Findings
 
-1. **The remaining performance gap is a data coverage problem.** Over half of false positives on DDI come from conditions the model has never seen (psoriasis, eczema, warts, etc.). No architecture change fixes this without broader training data.
+1. **The remaining performance gap is a data coverage problem.** Over half of false positives on DDI come from conditions the model has never seen (warts, epidermal cysts, seborrheic keratoses, etc.). No architecture change fixes this without broader training data.
 
-2. **Per-Fitzpatrick thresholds are the most effective fairness intervention.** A simple threshold adjustment per skin tone group moved V-VI sensitivity by 6.2 points — more than any architectural change across 19 experiments.
+2. **Per-Fitzpatrick thresholds are the most effective fairness intervention.** A simple threshold adjustment per skin tone group moved V-VI sensitivity by 6.2 points — more than any architectural change across 22 experiments.
 
-3. **CLIP-family vision encoders encode imaging domain as a dominant feature.** MedSigLIP separates clinical photos from dermoscopic images at 99.5% accuracy, and real from synthetic at 95.7%. This domain shortcut is the root cause of multiple failed cross-domain approaches.
+3. **Vision encoders encode imaging domain as a dominant feature.** MedSigLIP separates clinical photos from dermoscopic images at 99.5% accuracy. PanDerm (CLIP-distilled) shows the same shortcut at 99.2%, and DINOv3 (pure self-supervised, zero CLIP involvement) at 99.0% — proving this is fundamental to image statistics, not the training objective. This domain shortcut is the root cause of multiple failed cross-domain approaches, and the encoder-swap path is permanently closed.
 
 4. **DDI metrics overstate the clinical problem.** At realistic PCP prevalence (~3% malignant), the tool's "low risk" call is correct 99.3% of the time. The adversarial benchmark has clinical value for stress-testing, but does not reflect deployment conditions.
 
 ### What's Next
 
 - **Clinical pilot study** — gathering clinician feedback on the current model (in progress)
-- **PanDerm encoder evaluation** — a self-supervised vision model (Nature Medicine 2025) trained on 2M+ dermatology images across 4 imaging modalities. Unlike CLIP-family encoders, PanDerm was not trained with text-image contrastive learning, which may eliminate the domain shortcut that limited our current approach
+- **Reader study** — formal within-subjects crossover study with PCPs evaluating AI-aided vs unaided triage on DDI images, with IRB approval and pre-registration planned
+- **Derm1M-native binary model** — train a "refer vs routine" classifier directly on clinical photos, sidestepping the cross-domain shortcut entirely
 - **Prospective validation** — real-world testing beyond retrospective research datasets
 
 ---
@@ -249,7 +253,7 @@ DermTriage is the product of 19 systematic experiments across 20 notebooks. The 
 
 - **Grad-CAM heatmaps** show which image regions drive the prediction, so clinicians can verify the model is looking at the lesion — not background artifacts or rulers in the frame.
 - **MedGemma clinical explanations** generate a natural language assessment describing visible features, consistency with the classification, and recommended clinical actions.
-- **Temperature-calibrated confidence scores** (T=0.923, ECE=0.067) ensure that when the model says 80% confidence, it is correct approximately 80% of the time.
+- **Temperature-calibrated confidence scores** — each encoder head uses a learned temperature (MedSigLIP T=1.42, DermLIP T=1.45) to calibrate probability outputs toward the true distribution.
 
 ---
 
@@ -277,7 +281,7 @@ DermTriage is the product of 19 systematic experiments across 20 notebooks. The 
 |-----------|--------------|
 | Primary encoder | MedSigLIP-448 (Google, frozen) |
 | Secondary encoder | DermLIP (derm-specific, frozen) |
-| Architecture | Dual-encoder ensemble with lightweight classification heads (<1M trainable params) |
+| Architecture | Dual-encoder ensemble with lightweight classification heads (~863K trainable params) |
 | Triage output | Three-zone: REFER / UNCERTAIN / LOW RISK |
 | Explainability | MedGemma-4B-IT (clinical text), Grad-CAM (visual heatmap) |
 | Training infrastructure | Google Colab (A100 GPU) |
